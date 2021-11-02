@@ -4,6 +4,7 @@
      
 <p align="center">
   <a href="#usage">Usage</a> •
+  <a href="#Installation">Installation</a> •
 </p>
 
 ---

@@ -1,3 +1,3 @@
-module json_to_wordlist
+module github.com/secinto/json2list
 
-go 1.16
+go 1.17

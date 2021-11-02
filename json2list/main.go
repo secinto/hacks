@@ -1,4 +1,4 @@
-package json_to_wordlist
+package main
 
 import (
 	"bufio"
@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -27,19 +28,27 @@ func main() {
 	flag.StringVar(&inputFile, "input", "", "")
 	flag.StringVar(&inputFile, "i", "", "")
 
+	var useOnlyLowerCase bool
+	flag.BoolVar(&useOnlyLowerCase, "lower", false, "")
+	flag.BoolVar(&useOnlyLowerCase, "l", false,"")
+
 	flag.Parse()
 
-	const maxCapacity = 512*1024
+	//fmt.Println("All options parsed")
+
+	const maxCapacity = 512 * 1024
 	buf := make([]byte, maxCapacity)
 
-	if isFlagPassed("input") {
-		buf := readJsonFileToByte(inputFile)
+	if isFlagPassed("i") || isFlagPassed("input") {
+		buf = readJsonFileToByte(inputFile)
 	} else {
 		// fetch for all domains from stdin
 		sc := bufio.NewScanner(os.Stdin)
 
 		sc.Buffer(buf, maxCapacity)
 	}
+
+	parseJsonToWordList(buf, outputFile)
 }
 
 func parseJsonToWordList(buffer []byte, outputFile string) {
@@ -49,14 +58,151 @@ func parseJsonToWordList(buffer []byte, outputFile string) {
 	}
 	defer file.Close()
 
+	var result map[string]interface{}
+	e := json.Unmarshal(buffer, &result)
+
+	// panic on error
+	if e != nil {
+		panic(e)
+	}
+
+	var entries []string
+	var uniqueMap = make(map[string]bool)
+
+	parseMap(result, &entries, uniqueMap)
+
 	w := bufio.NewWriter(file)
-
-	writtenBytes, err := w.Write(buffer)
-
-	fmt.Printf("Wrote %d byte to file %s", writtenBytes, outputFile)
-
+	for _, line := range entries {
+		fmt.Fprintln(w, line)
+	}
 	w.Flush()
+}
 
+func parseMap(aMap map[string]interface{}, entries *[]string, uniqueMap map[string]bool) {
+	for key, val := range aMap {
+		switch concreteVal := val.(type) {
+		case map[string]interface{}:
+			if checkForInclusion(key) {
+				add(key, entries, uniqueMap)
+			}
+			parseMap(val.(map[string]interface{}), entries, uniqueMap)
+
+		case []interface{}:
+			if checkForInclusion(key) {
+				add(key, entries, uniqueMap)
+			}
+			parseArray(val.([]interface{}), entries, uniqueMap)
+
+		case nil:
+			continue
+
+		case string:
+			if checkForInclusion(key) {
+				add(key, entries, uniqueMap)
+			}
+
+			if checkForInclusion(concreteVal) {
+				add(concreteVal, entries, uniqueMap)
+			}
+
+		default:
+			continue
+		}
+	}
+}
+
+func parseArray(anArray []interface{}, entries *[]string, uniqueMap map[string]bool) {
+	for _, val := range anArray {
+		switch concreteVal := val.(type) {
+		case map[string]interface{}:
+			parseMap(val.(map[string]interface{}), entries, uniqueMap)
+
+		case []interface{}:
+			parseArray(val.([]interface{}), entries, uniqueMap)
+
+		case nil:
+			continue
+
+		case string:
+			if checkForInclusion(concreteVal) {
+				//fmt.Println("Adding value from array", concreteVal)
+				add(concreteVal, entries, uniqueMap)
+			}
+
+		default:
+			continue
+		}
+	}
+}
+
+func add(entry string, entries *[]string, uniqueMap map[string]bool) {
+	if strings.ToUpper(entry) != entry {
+		entry = strings.ToLower(entry)
+	}
+	if uniqueMap[entry] {
+		return // Already in the map
+	}
+	*entries = append(*entries, entry)
+	uniqueMap[entry] = true
+}
+
+func checkForInclusion(content string) bool {
+
+	// If it is empty it is not used as keyword
+	if len(content) < 2 {
+		return false
+	}
+	// If is just a number we don't use it as keyword
+	if isNumeric(content) {
+		return false
+	}
+	// If a white space is contained we don't use it as keyword
+	if strings.Contains(content, " ") {
+		return false
+	}
+
+	if strings.Contains(content, "/") || strings.Contains(content, ",") ||
+		strings.Contains(content, "{") || strings.Contains(content, "}") ||
+		strings.Contains(content, ":") || strings.Contains(content, "%") ||
+		strings.Contains(content, "."){
+		return false
+	}
+
+	if strings.Contains(content, "{") || strings.Contains(content, "}") {
+		return false
+	}
+
+	if strings.HasPrefix(content, "#") {
+		return false
+	}
+
+	if strings.Contains(content, "\u00e4") || strings.Contains(content, "\u00f6") ||
+		strings.Contains(content, "\u00fc") || strings.Contains(content, "\u00D6") ||
+		strings.Contains(content, "\u00DC") || strings.Contains(content, "\u00C4") ||
+		strings.Contains(content, "\u00DF") {
+		return false
+	}
+
+	if strings.Contains(content, "-") {
+		found := false
+		parts := strings.Split(content, "-")
+		for _, part := range parts {
+			if !isNumeric(part) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isNumeric(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
 }
 
 func readJsonFileToByte(jsonFile string) []byte {
@@ -65,14 +211,12 @@ func readJsonFileToByte(jsonFile string) []byte {
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println("Successfully Opened users.json")
+	fmt.Println("Successfully opened", jsonFile)
 	// defer the closing of our jsonFile so that we can parse it later on
 	defer file.Close()
 
 	byteValue, _ := ioutil.ReadAll(file)
 
-	var result map[string]interface{}
-	json.Unmarshal([]byte(byteValue), &result)
 	return byteValue
 }
 

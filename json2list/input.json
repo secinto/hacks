@@ -24898,25 +24898,6 @@
 		"timezone": "Europe/Vienna",
 		"running_since": 961358
 	},
-	"userData": {
-		"user_id": 1,
-		"userId": 1,
-		"department_id": 1,
-		"accessToken": "2e0afcf6261ea42b947309eebedf8f34",
-		"refreshToken": "b3b4ed0b676ebddad8ca26748b072577",
-		"dateAllowedWithoutRequest": false,
-		"statisticForAllUsers": true,
-		"editTasksProjects": true,
-		"enableUserToStatisticDepartmentPermission": false,
-		"hrStatisticForAllUsers": true,
-		"allowStartTask": true,
-		"showHolidayAddButtons": {
-			"holiday": true,
-			"overtime_reduction": true,
-			"sick_leave": true,
-			"other_paid_leave": true
-		}
-	},
 	"survey": {
 		"surveys": []
 	},

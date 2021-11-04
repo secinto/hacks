@@ -13,11 +13,9 @@ import (
 
 func main() {
 	var onlyKeys bool
-	flag.BoolVar(&onlyKeys, "k", false, "")
 	flag.BoolVar(&onlyKeys, "keys", false, "")
 
 	var onlyValues bool
-	flag.BoolVar(&onlyValues, "v", false, "")
 	flag.BoolVar(&onlyValues, "values", false, "")
 
 	var outputFile string

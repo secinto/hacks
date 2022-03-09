@@ -15,8 +15,8 @@ Parses JSON data and uses keys and values which seem to be variables or special 
 
 # Usage
 
-```sh
-json2tool -h
+```
+sh json2tool -h
 ```
 This will display help for the tool. It is also possible to provide the input as piped input via stdin. 
 
